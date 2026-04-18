@@ -1,0 +1,6 @@
+Owner,Ticker,Asset_Name,Transaction_Type,Shares,INR_Amount,Trade_Date
+Rahul,VTI,Vanguard Total Stock Market ETF,Buy,5,37250.00,2024-02-10
+Rahul,VTI,Vanguard Total Stock Market ETF,Buy,3,23100.00,2024-08-15
+Rahul,QQQ,Invesco QQQ Trust (Nasdaq 100),Buy,2,39800.00,2024-05-20
+Priya,AAPL,Apple Inc.,Buy,10,145000.00,2023-11-12
+Priya,MSFT,Microsoft Corporation,Buy,4,121600.00,2024-01-25

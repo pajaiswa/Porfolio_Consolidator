@@ -1,0 +1,45 @@
+name: CI — Portfolio Consolidator
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  test:
+    name: Run Tests & Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Check out the repository
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Set up uv (fast Python package manager used by this project)
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          version: "latest"
+
+      # 3. Install all dependencies (reads pyproject.toml / uv.lock)
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      # 4. Run full test suite with coverage
+      - name: Run pytest with coverage
+        run: |
+          uv run pytest tests/ -v \
+            --cov=pipeline \
+            --cov-report=term-missing \
+            --cov-report=html:htmlcov \
+            --cov-fail-under=75
+
+      # 5. Upload HTML coverage report as a build artifact
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        if: always()   # upload even if tests fail so you can inspect
+        with:
+          name: coverage-report
+          path: htmlcov/
+          retention-days: 14

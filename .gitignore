@@ -1,0 +1,55 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.ipynb_checkpoints/
+
+# Scratch/temporary files
+tmp_*.py
+test_scrape.py
+take_screenshots.py
+mc_test.html
+
+# Sensitive environment variables
+.env
+
+# Office temp files
+~$*
+
+# Input files (contain personal financial data — never commit these)
+[Dd]ata/input/mf/*.pdf
+[Dd]ata/input/mf/*.xlsx
+[Dd]ata/input/NPS/*.pdf
+[Dd]ata/input/EPF/*.csv
+[Dd]ata/input/FD/*.xlsx
+[Dd]ata/input/stock/*.xlsx
+[Dd]ata/input/global/global_transactions.csv
+[Dd]ata/input/allocation_overrides.csv
+[Dd]ata/input/asset_allocation_map.csv
+
+# Explicitly allow sample_data/ (anonymised, dummy reference data for GitHub)
+!sample_data/
+!sample_data/**
+
+# Explicitly allow docs/screenshots/ (README images)
+!docs/
+!docs/screenshots/
+!docs/screenshots/*.png
+
+# Generated output files (re-created on each pipeline run)
+[Dd]ata/output/
+[Dd]ata/cache/
+[Dd]ata/factsheets/
+
+# Old mixed-case Data directory output files (kept as legacy for any manual CSVs)
+[Dd]ata/current_holdings.csv
+[Dd]ata/live_valuations.csv
+[Dd]ata/master_ledger.csv
+[Dd]ata/portfolio_performance.csv
+[Dd]ata/dashboard_executive_metrics.csv
+[Dd]ata/dashboard_fund_metrics.csv
+
+# Accumulated test reports / spreadsheets (exclude loose xlsx at root)
+*.xlsx
+!data/input/**/*.xlsx
+!sample_data/**/*.xlsx

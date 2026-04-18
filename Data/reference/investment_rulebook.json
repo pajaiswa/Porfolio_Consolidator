@@ -1,0 +1,428 @@
+{
+  "_metadata": {
+    "version": "2.0.0",
+    "schema": "mf_advisor_rulebook",
+    "last_updated": "2026-03-01",
+    "authored_by": "Portfolio Research Desk",
+    "description": "Configurable scoring rulebook for Indian Mutual Fund advisory engine. All weights, thresholds, and rules are defined here. No scoring logic lives in LLM prompts.",
+    "changelog": [
+      "v2.0.0 (2026-03-01): Full multi-factor scorecard with qualitative module",
+      "v1.0.0 (2025-01-01): Initial prompt-embedded rules"
+    ]
+  },
+
+  "scoring_architecture": {
+    "description": "Two-layer scoring: Python computes deterministic quantitative scores. LLM computes qualitative scores using structured rubrics. Final score is a weighted blend.",
+    "quantitative_weight": 0.70,
+    "qualitative_weight": 0.30,
+    "score_scale": 10,
+    "note": "Qualitative weight increases to 0.40 if factsheet data is available (qualitative_boost_if_factsheet_available = true)"
+  },
+
+  "quantitative_scorecard": {
+    "_total_weight": 1.0,
+    "_description": "Each dimension is scored 0-10. Dimension scores are weighted to produce a composite quantitative score (0-10).",
+
+    "dimensions": {
+
+      "alpha_generation": {
+        "weight": 0.35,
+        "description": "Measures the fund manager's true value-add over the benchmark. Rewards consistent alpha across time horizons.",
+        "sub_factors": {
+          "alpha_3y": {
+            "weight": 0.55,
+            "description": "3-year alpha is the primary signal — captures recent manager skill.",
+            "scoring_table": [
+              { "condition": "alpha >= 5.0",  "score": 10, "label": "Exceptional" },
+              { "condition": "alpha >= 3.0",  "score": 8,  "label": "Strong" },
+              { "condition": "alpha >= 1.5",  "score": 6,  "label": "Positive" },
+              { "condition": "alpha >= 0.0",  "score": 5,  "label": "Neutral" },
+              { "condition": "alpha >= -1.5", "score": 3,  "label": "Slight Lag" },
+              { "condition": "alpha >= -3.0", "score": 2,  "label": "Underperforming" },
+              { "condition": "alpha < -3.0",  "score": 0,  "label": "Significant Drag" }
+            ]
+          },
+          "alpha_5y": {
+            "weight": 0.45,
+            "description": "5-year alpha validates structural skill vs. lucky cycles.",
+            "scoring_table": [
+              { "condition": "alpha >= 4.0",  "score": 10, "label": "Exceptional" },
+              { "condition": "alpha >= 2.0",  "score": 8,  "label": "Strong" },
+              { "condition": "alpha >= 0.5",  "score": 6,  "label": "Positive" },
+              { "condition": "alpha >= 0.0",  "score": 5,  "label": "Neutral" },
+              { "condition": "alpha >= -1.5", "score": 3,  "label": "Slight Lag" },
+              { "condition": "alpha < -1.5",  "score": 1,  "label": "Chronic Underperformer" }
+            ],
+            "na_handling": "If 5Y data is unavailable, use alpha_3y score with a 0.10 penalty applied to the dimension score."
+          }
+        }
+      },
+
+      "risk_adjusted_returns": {
+        "weight": 0.25,
+        "description": "Rewards funds that generate returns efficiently without excessive volatility.",
+        "sub_factors": {
+          "sharpe_ratio": {
+            "weight": 0.50,
+            "description": "Primary risk-adjusted metric. Higher is better.",
+            "scoring_table": [
+              { "condition": "sharpe >= 1.5", "score": 10, "label": "Elite" },
+              { "condition": "sharpe >= 1.0", "score": 8,  "label": "Strong" },
+              { "condition": "sharpe >= 0.6", "score": 6,  "label": "Acceptable" },
+              { "condition": "sharpe >= 0.3", "score": 4,  "label": "Below Average" },
+              { "condition": "sharpe >= 0.0", "score": 2,  "label": "Weak" },
+              { "condition": "sharpe < 0.0",  "score": 0,  "label": "Value Destroying" }
+            ]
+          },
+          "sortino_ratio": {
+            "weight": 0.30,
+            "description": "Penalizes only downside volatility. Better signal than Sharpe for equity funds.",
+            "scoring_table": [
+              { "condition": "sortino >= 2.0", "score": 10 },
+              { "condition": "sortino >= 1.5", "score": 8 },
+              { "condition": "sortino >= 1.0", "score": 6 },
+              { "condition": "sortino >= 0.5", "score": 4 },
+              { "condition": "sortino < 0.5",  "score": 2 }
+            ],
+            "na_handling": "If unavailable, use Sharpe score as proxy."
+          },
+          "beta": {
+            "weight": 0.20,
+            "description": "Market sensitivity. Penalty for taking excessive market risk without commensurate returns.",
+            "scoring_table": [
+              { "condition": "beta >= 0.8 AND beta <= 1.05",  "score": 10, "label": "Disciplined Market Exposure" },
+              { "condition": "beta >= 0.6 AND beta < 0.8",   "score": 8,  "label": "Defensive" },
+              { "condition": "beta > 1.05 AND beta <= 1.20",  "score": 6,  "label": "Slightly Aggressive" },
+              { "condition": "beta < 0.6 OR beta > 1.20",     "score": 3,  "label": "Extreme — Defensive or Overly Aggressive" }
+            ],
+            "category_override": {
+              "description": "Beta tolerance varies by category. A Small Cap fund with Beta=1.2 is normal. A Large Cap fund with Beta=1.2 is a red flag.",
+              "Large Cap": { "optimal_range": [0.85, 1.05], "high_threshold": 1.15 },
+              "Mid Cap":   { "optimal_range": [0.90, 1.15], "high_threshold": 1.25 },
+              "Small Cap": { "optimal_range": [0.90, 1.25], "high_threshold": 1.40 },
+              "Flexi Cap": { "optimal_range": [0.75, 1.10], "high_threshold": 1.20 },
+              "Debt":      { "optimal_range": [0.0,  0.30], "high_threshold": 0.50 }
+            }
+          }
+        }
+      },
+
+      "cost_efficiency": {
+        "weight": 0.20,
+        "description": "Expense ratio directly reduces investor returns. Penalizes expensive funds, rewards lean ones.",
+        "sub_factors": {
+          "expense_ratio_vs_category_norm": {
+            "weight": 1.0,
+            "category_norms": {
+              "Large Cap":        { "low": 0.80,  "moderate": 1.20, "high": 1.60 },
+              "Mid Cap":          { "low": 0.90,  "moderate": 1.40, "high": 1.80 },
+              "Small Cap":        { "low": 1.00,  "moderate": 1.60, "high": 2.00 },
+              "Flexi Cap":        { "low": 0.80,  "moderate": 1.30, "high": 1.70 },
+              "ELSS":             { "low": 0.80,  "moderate": 1.30, "high": 1.80 },
+              "Index Fund":       { "low": 0.10,  "moderate": 0.30, "high": 0.60 },
+              "Debt Short":       { "low": 0.20,  "moderate": 0.40, "high": 0.70 },
+              "Debt Long":        { "low": 0.40,  "moderate": 0.70, "high": 1.10 },
+              "Hybrid Aggressive":{ "low": 0.90,  "moderate": 1.50, "high": 1.90 },
+              "Default":          { "low": 0.80,  "moderate": 1.40, "high": 2.00 }
+            },
+            "scoring_logic": "Compare expense_ratio to the category norm thresholds above. Score 10 if below 'low', scale linearly to 0 if above 'high'.",
+            "scoring_table": [
+              { "condition": "er <= low",                      "score": 10, "label": "Best-in-Class Cost" },
+              { "condition": "er <= low + (moderate-low)*0.5", "score": 8,  "label": "Competitive" },
+              { "condition": "er <= moderate",                 "score": 6,  "label": "Market Rate" },
+              { "condition": "er <= high",                     "score": 4,  "label": "Above Average Cost" },
+              { "condition": "er > high",                      "score": 1,  "label": "Expensive — Significant Drag" }
+            ]
+          }
+        }
+      },
+
+      "return_consistency": {
+        "weight": 0.20,
+        "description": "Rolling return consistency separates funds that outperform randomly vs. structurally. This is the most under-valued metric by retail investors.",
+        "sub_factors": {
+          "rolling_cagr_vs_peer_median": {
+            "weight": 0.60,
+            "description": "Rolling 3Y CAGR vs. peer median. Above-peer consistency is a structural alpha signal.",
+            "scoring_table": [
+              { "condition": "rolling_outperformance >= 3.0",  "score": 10, "label": "Consistent Outperformer" },
+              { "condition": "rolling_outperformance >= 1.0",  "score": 8,  "label": "Above Peers" },
+              { "condition": "rolling_outperformance >= 0.0",  "score": 6,  "label": "In-line with Peers" },
+              { "condition": "rolling_outperformance >= -1.0", "score": 4,  "label": "Slightly Trailing" },
+              { "condition": "rolling_outperformance < -1.0",  "score": 1,  "label": "Consistently Below Peers" }
+            ]
+          },
+          "peer_percentile_rank": {
+            "weight": 0.40,
+            "description": "Peer rank percentile (0=worst, 100=best). From Kaggle dataset.",
+            "scoring_table": [
+              { "condition": "rank >= 75", "score": 10, "label": "Top Quartile" },
+              { "condition": "rank >= 50", "score": 7,  "label": "Above Median" },
+              { "condition": "rank >= 35", "score": 5,  "label": "Near Median" },
+              { "condition": "rank >= 25", "score": 3,  "label": "Below Median" },
+              { "condition": "rank < 25",  "score": 0,  "label": "Bottom Quartile — Red Flag" }
+            ],
+            "na_handling": "If peer rank unavailable, use rolling_cagr_vs_peer_median score for full weight of this dimension."
+          }
+        }
+      }
+    }
+  },
+
+  "qualitative_scorecard": {
+    "_total_weight": 1.0,
+    "_description": "LLM evaluates each dimension using structured rubrics from factsheet commentary. Score is 0-10 per dimension.",
+    "_important": "LLM MUST return scores as structured JSON — not narrative text. Narrative is generated separately after scoring.",
+
+    "dimensions": {
+
+      "manager_stability_and_track_record": {
+        "weight": 0.30,
+        "description": "Fund manager continuity is a strong predictor of consistent returns. Manager changes reset the performance clock.",
+        "llm_rubric": {
+          "score_10": "Same manager for 5+ years with stated conviction in strategy. Explicit stock rationale provided.",
+          "score_7": "Manager has 3-5 years tenure. Commentary is coherent and strategy-aligned.",
+          "score_5": "Manager changed within 2 years OR commentary is generic with no specific rationale.",
+          "score_2": "Recent manager change AND no clear strategy articulation. Performance continuity at risk.",
+          "score_0": "No manager information available OR multiple manager changes in 2 years."
+        },
+        "data_sources": ["factsheet_commentary", "fund_manager_name", "manager_since_date"]
+      },
+
+      "style_integrity": {
+        "weight": 0.40,
+        "description": "The most critical qualitative check. Style drift (e.g., a 'Value' fund buying high-PE growth stocks) is a silent risk that only manifests in drawdowns.",
+        "llm_rubric": {
+          "score_10": "Commentary perfectly matches stated style. A 'value' fund cites low PE/PB. A 'growth' fund cites earnings acceleration. Zero drift signals.",
+          "score_7": "Commentary broadly aligns with style. Minor deviations are acknowledged and explained.",
+          "score_5": "Commentary is style-neutral or vague. Cannot confirm alignment.",
+          "score_2": "Commentary contains language inconsistent with stated style (e.g., a 'value' fund discussing momentum stocks). Possible drift.",
+          "score_0": "Clear style contradiction. Fund is doing the opposite of what it claims (e.g., 'Mid Cap' fund holding 60%+ large caps)."
+        },
+        "style_contradiction_signals": {
+          "Value Fund Red Flags": ["momentum", "high growth", "premium valuation", "disruptive", "PE expansion"],
+          "Growth Fund Red Flags": ["deep value", "distressed", "contrarian", "high dividend yield"],
+          "Large Cap Red Flags": ["small cap opportunity", "micro cap", "unlisted space"],
+          "Debt Short Duration Red Flags": ["duration call", "10-year gilt", "long end of the curve"]
+        },
+        "data_sources": ["factsheet_commentary", "portfolio_pe_ratio", "portfolio_pb_ratio", "sector_weights"]
+      },
+
+      "amc_governance_and_outlook": {
+        "weight": 0.30,
+        "description": "AMC-level signals: regulatory actions, AUM growth/decline, fee transparency, and macro outlook accuracy.",
+        "llm_rubric": {
+          "score_10": "AMC has been SEBI compliant with no recent actions. AUM is growing. Macro outlook is specific, data-backed, and nuanced.",
+          "score_7": "No regulatory issues. Outlook is reasonable but generic.",
+          "score_5": "Outlook is absent or copy-pasted boilerplate with no original analysis.",
+          "score_2": "Macro outlook contradicts available economic data. Or AMC has had a minor SEBI observation in the last 2 years.",
+          "score_0": "AMC has a SEBI enforcement action in the last 12 months. Or fund is under regulatory scrutiny."
+        },
+        "known_amc_flags": {
+          "_note": "Populate this list with AMCs having recent regulatory actions. Checked before LLM call.",
+          "sebi_actions": []
+        },
+        "data_sources": ["factsheet_commentary", "market_outlook_section", "amc_name"]
+      }
+    }
+  },
+
+  "investor_fit_module": {
+    "description": "Adjusts the final score based on fit with the investor's specific profile. Applied AFTER base scores are computed. This is a multiplier/modifier, not a separate dimension.",
+    "modifiers": {
+      "risk_mismatch_penalty": {
+        "description": "Penalize funds where fund risk profile grossly mismatches investor risk appetite.",
+        "rules": [
+          { "condition": "fund_category == 'Small Cap' AND investor_risk == 'Conservative'", "penalty": -2.0, "reason": "High volatility fund for conservative investor" },
+          { "condition": "fund_category == 'Debt Short' AND investor_risk == 'Aggressive' AND investor_horizon_years > 10", "penalty": -1.0, "reason": "Suboptimal allocation for long-horizon aggressive investor" },
+          { "condition": "fund_category in ['Index Fund', 'Large Cap'] AND investor_risk == 'Aggressive' AND investor_age < 40", "penalty": -0.5, "reason": "Mild underutilization of risk capacity" }
+        ]
+      },
+      "horizon_mismatch_penalty": {
+        "description": "Short-term investors in long-duration or volatile funds are penalized.",
+        "rules": [
+          { "condition": "fund_category == 'Small Cap' AND investor_horizon_years < 5", "penalty": -2.0 },
+          { "condition": "fund_category in ['Mid Cap', 'Flexi Cap'] AND investor_horizon_years < 3", "penalty": -1.5 }
+        ]
+      },
+      "diversification_bonus": {
+        "description": "Reward a fund if it genuinely diversifies the portfolio (different category, low overlap).",
+        "bonus": 0.5,
+        "condition": "fund adds a unique category absent in other 2 funds"
+      },
+      "concentration_penalty": {
+        "description": "If 2 or more of the top 3 funds are in the same category, penalize the duplicate.",
+        "penalty": -1.0,
+        "condition": "fund category duplicates another fund in the top-3"
+      }
+    }
+  },
+
+  "verdict_thresholds": {
+    "description": "Final score (0-10) maps to verdicts. These thresholds are configurable.",
+    "_note": "Verdicts are determined by final_score = (quant_score * quant_weight) + (qual_score * qual_weight) + investor_fit_modifiers",
+    "BUY_MORE": {
+      "min_score": 7.5,
+      "additional_conditions": [
+        "alpha_3y > 0",
+        "expense_ratio <= category_norm_high",
+        "investor_fit != 'No'"
+      ],
+      "description": "Strong conviction fund — increase allocation on next SIP review."
+    },
+    "HOLD": {
+      "min_score": 5.5,
+      "max_score": 7.49,
+      "additional_conditions": [],
+      "description": "Performing adequately. No action needed but monitor quarterly."
+    },
+    "REDUCE": {
+      "min_score": 3.5,
+      "max_score": 5.49,
+      "additional_conditions": [],
+      "description": "Structurally weak. Reduce SIP by 50% and reassess in 2 quarters."
+    },
+    "EXIT": {
+      "max_score": 3.49,
+      "override_conditions": [
+        "alpha_3y < -3 AND alpha_5y < -2",
+        "peer_rank < 25 AND expense_ratio > category_norm_high",
+        "style_integrity_score < 2"
+      ],
+      "description": "Exit and redeploy into a higher-scoring fund in the same category."
+    }
+  },
+
+  "override_rules": {
+    "description": "Hard rules that can force a verdict regardless of score. Applied last.",
+    "rules": [
+      {
+        "id": "OR-001",
+        "name": "SEBI Enforcement Override",
+        "condition": "amc in known_amc_flags.sebi_actions",
+        "force_verdict": "REDUCE",
+        "force_min": true,
+        "reason": "Regulatory risk overrides quantitative performance."
+      },
+      {
+        "id": "OR-002",
+        "name": "Catastrophic Alpha Override",
+        "condition": "alpha_3y < -5.0 AND alpha_5y < -4.0",
+        "force_verdict": "EXIT",
+        "reason": "Chronic severe underperformance — no quantitative recovery path."
+      },
+      {
+        "id": "OR-003",
+        "name": "Style Drift Critical Override",
+        "condition": "style_integrity_score < 2",
+        "force_verdict": "REDUCE",
+        "reason": "Style drift detected — future returns are unpredictable."
+      },
+      {
+        "id": "OR-004",
+        "name": "New Fund Caution",
+        "condition": "fund_age_years < 3",
+        "force_max_verdict": "HOLD",
+        "reason": "Insufficient track record. Cannot issue BUY MORE on funds under 3 years old."
+      },
+      {
+        "id": "OR-005",
+        "name": "Manager Honeymoon Override",
+        "condition": "manager_tenure_years < 1",
+        "force_max_verdict": "HOLD",
+        "reason": "New manager. Cannot assess skill with <1 year of data."
+      }
+    ]
+  },
+
+  "macro_rebalancing_rules": {
+    "description": "Age-based target allocation bands. Used by the Macro Asset Allocation Strategist agent.",
+    "age_bands": [
+      {
+        "label": "Accumulation Phase",
+        "age_range": [18, 40],
+        "target_allocation": {
+          "Equity": { "min": 70, "ideal": 80, "max": 90 },
+          "Debt":   { "min": 5,  "ideal": 15, "max": 25 },
+          "Gold":   { "min": 5,  "ideal": 5,  "max": 10 }
+        }
+      },
+      {
+        "label": "Growth Phase",
+        "age_range": [41, 55],
+        "target_allocation": {
+          "Equity": { "min": 55, "ideal": 65, "max": 75 },
+          "Debt":   { "min": 15, "ideal": 25, "max": 35 },
+          "Gold":   { "min": 5,  "ideal": 10, "max": 15 }
+        }
+      },
+      {
+        "label": "Pre-Retirement Phase",
+        "age_range": [56, 65],
+        "target_allocation": {
+          "Equity": { "min": 30, "ideal": 45, "max": 55 },
+          "Debt":   { "min": 35, "ideal": 45, "max": 55 },
+          "Gold":   { "min": 5,  "ideal": 10, "max": 15 }
+        }
+      },
+      {
+        "label": "Retirement Phase",
+        "age_range": [66, 99],
+        "target_allocation": {
+          "Equity": { "min": 10, "ideal": 25, "max": 35 },
+          "Debt":   { "min": 55, "ideal": 65, "max": 75 },
+          "Gold":   { "min": 5,  "ideal": 10, "max": 15 }
+        }
+      }
+    ],
+    "rebalancing_trigger": {
+      "description": "Flag for rebalancing if any asset class deviates from ideal by this many percentage points.",
+      "threshold_pct": 10
+    }
+  },
+
+  "data_quality_rules": {
+    "description": "Governs how missing or stale data affects scoring confidence.",
+    "stale_data_threshold_days": 90,
+    "minimum_data_requirements": {
+      "for_any_verdict": ["fund_name", "nav_date", "cagr_3y"],
+      "for_high_confidence": ["alpha_3y", "sharpe_3y", "expense_ratio", "rolling_cagr_3y"],
+      "for_buy_more": ["alpha_3y", "alpha_5y", "peer_rank", "rolling_cagr_3y", "expense_ratio"]
+    },
+    "confidence_degradation": [
+      { "missing_fields_count": 0, "confidence": "HIGH" },
+      { "missing_fields_count": 1, "confidence": "HIGH" },
+      { "missing_fields_count": 2, "confidence": "MEDIUM" },
+      { "missing_fields_count": 3, "confidence": "MEDIUM" },
+      { "missing_fields_count": 4, "confidence": "LOW" },
+      { "missing_fields_count": 5, "confidence": "LOW — Insufficient Data" }
+    ],
+    "na_handling_policy": "Never invent a number. Use available data and note explicitly what is missing. Downgrade confidence accordingly."
+  },
+
+  "report_config": {
+    "description": "Controls what appears in the generated report.",
+    "sections": {
+      "executive_summary": true,
+      "verdict_table": true,
+      "per_fund_recommendations": true,
+      "score_breakdown_table": true,
+      "macro_asset_allocation": true,
+      "qualitative_risk": true,
+      "next_steps": true,
+      "data_footnotes": true,
+      "disclaimer": true
+    },
+    "score_display": {
+      "show_sub_scores": true,
+      "show_override_triggers": true,
+      "show_confidence": true
+    },
+    "verdict_emoji": {
+      "BUY_MORE": "🔵",
+      "HOLD": "🟢",
+      "REDUCE": "🟡",
+      "EXIT": "🔴"
+    }
+  }
+}
