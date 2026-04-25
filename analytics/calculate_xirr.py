@@ -17,6 +17,18 @@ from pyxirr import xirr
 
 logger = logging.getLogger(__name__)
 
+# Minimum days held before XIRR annualisation is meaningful.
+# Mirrors the same constant in dashboard/app.py.
+XIRR_MIN_DAYS: int = 365
+
+
+def _days_since_first_cf(cf_df: pd.DataFrame) -> int:
+    """Return the number of calendar days since the earliest non-zero cash flow."""
+    if cf_df.empty:
+        return 0
+    earliest = pd.to_datetime(cf_df['Date'].min())
+    return (pd.Timestamp.now().normalize() - earliest.normalize()).days
+
 
 # ---------------------------------------------------------------------------
 # 1. Cash-flow normalisation
@@ -168,7 +180,11 @@ def calculate_portfolio_performance(
 
             if amounts and any(a < 0 for a in amounts):
                 try:
-                    m_xirr = round(xirr(ac_xirr_data['Date'].tolist(), amounts) * 100, 2)
+                    days = _days_since_first_cf(ac_cf)
+                    m_xirr = (
+                        round(xirr(ac_xirr_data['Date'].tolist(), amounts) * 100, 2)
+                        if days >= XIRR_MIN_DAYS else None
+                    )
                     m_invested = calculate_fifo_invested(ac_ledger)
                     member_total_invested += m_invested
                     member_summaries.append({
@@ -178,6 +194,7 @@ def calculate_portfolio_performance(
                         'Return': ac_current_val - m_invested,
                         'Abs %': round(((ac_current_val - m_invested) / m_invested) * 100, 2) if m_invested else 0,
                         'XIRR %': m_xirr,
+                        'Days Held': days,
                     })
                 except Exception as e:
                     logger.warning("Could not calculate XIRR for %s %s: %s", owner, ac, e)
@@ -198,7 +215,11 @@ def calculate_portfolio_performance(
             amounts = mem_xirr_data['Net_Cash_Flow'].tolist()
             if amounts and any(a < 0 for a in amounts):
                 try:
-                    m_xirr = round(xirr(mem_xirr_data['Date'].tolist(), amounts) * 100, 2)
+                    days = _days_since_first_cf(member_total_cf)
+                    m_xirr = (
+                        round(xirr(mem_xirr_data['Date'].tolist(), amounts) * 100, 2)
+                        if days >= XIRR_MIN_DAYS else None
+                    )
                     member_summaries.append({
                         'Entity': f"👤 {owner.upper()} TOTAL",
                         'Invested': member_total_invested,
@@ -206,6 +227,7 @@ def calculate_portfolio_performance(
                         'Return': member_total_current_val - member_total_invested,
                         'Abs %': round(((member_total_current_val - member_total_invested) / member_total_invested) * 100, 2) if member_total_invested else 0,
                         'XIRR %': m_xirr,
+                        'Days Held': days,
                     })
                 except Exception as e:
                     logger.warning("Could not calculate XIRR for %s TOTAL: %s", owner, e)
@@ -232,13 +254,18 @@ def calculate_portfolio_performance(
         amounts = ac_xirr_data['Net_Cash_Flow'].tolist()
         if amounts and any(a < 0 for a in amounts):
             try:
+                days = _days_since_first_cf(ac_cf)
                 member_summaries.append({
                     'Entity': f"📈 FAMILY {ac.upper()}",
                     'Invested': ac_invested,
                     'Current': ac_current_val,
                     'Return': ac_current_val - ac_invested,
                     'Abs %': round(((ac_current_val - ac_invested) / ac_invested) * 100, 2) if ac_invested else 0,
-                    'XIRR %': round(xirr(ac_xirr_data['Date'].tolist(), amounts) * 100, 2),
+                    'XIRR %': (
+                        round(xirr(ac_xirr_data['Date'].tolist(), amounts) * 100, 2)
+                        if days >= XIRR_MIN_DAYS else None
+                    ),
+                    'Days Held': days,
                 })
             except Exception as e:
                 logger.warning("Could not calculate XIRR for FAMILY %s: %s", ac, e)
@@ -260,13 +287,18 @@ def calculate_portfolio_performance(
         amounts = family_xirr_data['Net_Cash_Flow'].tolist()
         if amounts and any(a < 0 for a in amounts):
             try:
+                days = _days_since_first_cf(family_cf)
                 member_summaries.append({
                     'Entity': '🏠 CONSOLIDATED FAMILY',
                     'Invested': f_invested,
                     'Current': f_current,
                     'Return': f_current - f_invested,
                     'Abs %': round(((f_current - f_invested) / f_invested) * 100, 2) if f_invested else 0,
-                    'XIRR %': round(xirr(family_xirr_data['Date'].tolist(), amounts) * 100, 2),
+                    'XIRR %': (
+                        round(xirr(family_xirr_data['Date'].tolist(), amounts) * 100, 2)
+                        if days >= XIRR_MIN_DAYS else None
+                    ),
+                    'Days Held': days,
                 })
             except Exception:
                 pass

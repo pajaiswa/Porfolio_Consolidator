@@ -108,34 +108,63 @@ df_ledger, df_val, df_alloc_sum, df_alloc_drill = load_data(mtime=_val_mtime())
 # -------------------------------------------------------------------
 # 2. XIRR CALCULATION ENGINE
 # -------------------------------------------------------------------
+
+# Minimum holding period before XIRR annualisation is meaningful.
+# Below this threshold we return None for XIRR and display Abs % instead.
+# Industry standard: most platforms (Groww, Kuvera, ValueResearch) require ≥ 1 year.
+XIRR_MIN_DAYS: int = 365
+
+# Safety cap — even for long-duration holdings, cap displayed XIRR at ±500%.
+# Prevents fringe cases (e.g. penny-sized positions) from breaking the UI.
+XIRR_DISPLAY_CAP: float = 500.0
+
+
 def calculate_dynamic_xirr(ledger_subset, val_subset):
-    """Calculates Invested, Current Value, and XIRR for dynamic slices of the portfolio."""
+    """
+    Calculates Invested, Current Value, Absolute Return, and XIRR.
+
+    Returns:
+        (invested, current_val, abs_return, xirr_pct)
+
+    xirr_pct is None when the oldest cash flow is < XIRR_MIN_DAYS old,
+    meaning XIRR would be misleadingly large due to annualisation of a
+    very short holding period.  Callers should use fmt_xirr() to display.
+    """
     if ledger_subset.empty:
-        return 0.0, 0.0, 0.0, 0.0
-        
+        return 0.0, 0.0, 0.0, None
+
     cf_daily = ledger_subset.groupby('Date')['Net_Cash_Flow'].sum().reset_index()
     cf_daily = cf_daily[cf_daily['Net_Cash_Flow'] != 0]
-    
+
     if cf_daily.empty:
-        return 0.0, 0.0, 0.0, 0.0
-        
+        return 0.0, 0.0, 0.0, None
+
     from analytics.calculate_xirr import calculate_fifo_invested
     invested = calculate_fifo_invested(ledger_subset)
-    
     current_val = val_subset['Current Value'].sum() if not val_subset.empty else 0.0
-    
-    # Terminal Value
+    abs_return = current_val - invested
+
+    # ── Holding-period gate ─────────────────────────────────────────
+    # Days since the very first investment cash flow in this subset.
+    earliest_date = pd.to_datetime(cf_daily['Date'].min())
+    days_held = (pd.Timestamp.now().normalize() - earliest_date.normalize()).days
+
+    if days_held < XIRR_MIN_DAYS:
+        # Too early to annualise — return None so the UI shows Abs % instead.
+        return invested, current_val, abs_return, None
+
+    # ── Compute XIRR ────────────────────────────────────────────────
     if current_val > 0:
         terminal_row = pd.DataFrame({'Date': [datetime.now()], 'Net_Cash_Flow': [current_val]})
         xirr_data = pd.concat([cf_daily, terminal_row], ignore_index=True)
     else:
         xirr_data = cf_daily.copy()
-        
+
     xirr_data = xirr_data.groupby('Date')['Net_Cash_Flow'].sum().reset_index()
     dates = xirr_data['Date'].tolist()
     amounts = xirr_data['Net_Cash_Flow'].tolist()
-    
-    xirr_pct = 0.0
+
+    xirr_pct = None
     if amounts and any(a < 0 for a in amounts) and any(a > 0 for a in amounts):
         try:
             val = xirr(dates, amounts)
@@ -143,9 +172,7 @@ def calculate_dynamic_xirr(ledger_subset, val_subset):
                 xirr_pct = val * 100
         except Exception:
             pass
-            
-    abs_return = current_val - invested
-    
+
     return invested, current_val, abs_return, xirr_pct
 
 # -------------------------------------------------------------------
@@ -242,6 +269,21 @@ def fmt_amt(amount):
 
 def fmt_pct(pct):
     return f"{pct:,.2f}%"
+
+
+def fmt_xirr(xirr_pct) -> str:
+    """
+    Format an XIRR value for display with industry-standard rules:
+      - None  → "< 1 yr"  (holding too new to annualise meaningfully)
+      - |val| > XIRR_DISPLAY_CAP → "+>500%" / "->500%"  (safety cap)
+      - Otherwise → standard percentage string
+    """
+    if xirr_pct is None:
+        return "< 1 yr"
+    if abs(xirr_pct) > XIRR_DISPLAY_CAP:
+        sign = "+" if xirr_pct > 0 else "-"
+        return f"{sign}>{XIRR_DISPLAY_CAP:.0f}%"
+    return fmt_pct(xirr_pct)
 
 if app_mode == "Data Management":
     from dashboard.ui_data_management import render_data_management
@@ -398,13 +440,14 @@ with tab_overview:
     
     col1, col2, col3, col4 = responsive_cols(4)
     col1.metric("Total Invested (FIFO)", fmt_amt(inv))
-    
+
     delta_cur = f"₹ {ret:,.0f}" if show_values else r"\*\*\*"
     col2.metric("Current Value", fmt_amt(cur), delta_cur)
-    
+
     abs_pct = (ret / inv * 100) if inv > 0 else 0
     col3.metric("Absolute Return", fmt_pct(abs_pct), fmt_pct(abs_pct))
-    col4.metric("Annualized XIRR", fmt_pct(x_pct), fmt_pct(x_pct))
+    _xirr_label = "Annualized XIRR" if x_pct is not None else "XIRR (< 1 yr)"
+    col4.metric(_xirr_label, fmt_xirr(x_pct), fmt_xirr(x_pct))
     
     # -------------------------------------------------------------------
     # EXTRA KPIs (Best Performer & Dominant Class)
@@ -748,7 +791,8 @@ with tab_portfolios:
         tcol2.metric("Current Value", fmt_amt(p_cur), delta_p_cur)
         abs_p_pct = (p_ret/p_inv * 100) if p_inv else 0
         tcol3.metric("Absolute Return", fmt_pct(abs_p_pct), fmt_pct(abs_p_pct))
-        tcol4.metric("Annualized XIRR", fmt_pct(p_xirr), fmt_pct(p_xirr))
+        _p_xirr_label = "Annualized XIRR" if p_xirr is not None else "XIRR (< 1 yr)"
+        tcol4.metric(_p_xirr_label, fmt_xirr(p_xirr), fmt_xirr(p_xirr))
         tcol5.metric("Assets Held", len(o_val['Ticker'].unique()))
         
         st.markdown("<br>", unsafe_allow_html=True)
@@ -763,7 +807,7 @@ with tab_portfolios:
                 t_ledger = o_ledger[o_ledger['Ticker'] == ticker]
                 
                 t_inv, t_cur, t_ret, t_xirr = calculate_dynamic_xirr(t_ledger, o_val[o_val['Ticker'] == ticker])
-                
+
                 drill_data.append({
                     "Asset Name": t_val['Asset Name'],
                     "Asset Class": t_val['Asset Class'],
@@ -772,7 +816,7 @@ with tab_portfolios:
                     "Invested Base": float(t_inv),
                     "Market Value": float(t_cur),
                     "Absolute %": float(f"{(t_ret/t_inv * 100) if t_inv else 0:.2f}"),
-                    "XIRR %": float(f"{t_xirr:.2f}"),
+                    "XIRR %": fmt_xirr(t_xirr),   # string: handles None + cap
                     "Value Date": str(t_val.get('Value Date', '-'))
                 })
                 
@@ -794,9 +838,10 @@ with tab_portfolios:
                     "Invested Base": inv_col,
                     "Market Value": cur_col,
                     "Absolute %": st.column_config.ProgressColumn("Return %", format="%.2f%%", min_value=0, max_value=max(100, df_drill['Absolute %'].max())),
-                    "XIRR %": st.column_config.NumberColumn("XIRR", format="%.2f%%"),
+                    "XIRR %": st.column_config.TextColumn("XIRR (ann.)"),
                     "Value Date": st.column_config.TextColumn("Value Date")
                 }
+            st.caption("ℹ️ XIRR shown only for holdings ≥ 1 year. Younger positions show **< 1 yr** — use Absolute % instead.")
             
             # Use sleek data_editor instead of dataframe
             st.data_editor(
@@ -829,7 +874,8 @@ with tab_retirement:
         tcol2.metric("Current Value", fmt_amt(r_cur), delta_r_cur)
         abs_r_pct = (r_ret/r_inv * 100) if r_inv else 0
         tcol3.metric("Absolute Return", fmt_pct(abs_r_pct), fmt_pct(abs_r_pct))
-        tcol4.metric("Annualized XIRR", fmt_pct(r_xirr), fmt_pct(r_xirr))
+        _r_xirr_label = "Annualized XIRR" if r_xirr is not None else "XIRR (< 1 yr)"
+        tcol4.metric(_r_xirr_label, fmt_xirr(r_xirr), fmt_xirr(r_xirr))
         tcol5.metric("Active Schemes", len(ret_val['Ticker'].unique()))
         
         st.markdown("<br>", unsafe_allow_html=True)
@@ -841,7 +887,7 @@ with tab_retirement:
             t_ledger = ret_ledger[ret_ledger['Ticker'] == ticker]
             
             t_inv, t_cur, t_ret, t_xirr = calculate_dynamic_xirr(t_ledger, ret_val[ret_val['Ticker'] == ticker])
-            
+
             ret_data.append({
                 "Scheme Name": t_val['Asset Name'],
                 "Owner": t_val['Portfolio Owner'],
@@ -850,7 +896,7 @@ with tab_retirement:
                 "Invested Base": float(t_inv),
                 "Market Value": float(t_cur),
                 "Absolute %": float(f"{(t_ret/t_inv * 100) if t_inv else 0:.2f}"),
-                "XIRR %": float(f"{t_xirr:.2f}"),
+                "XIRR %": fmt_xirr(t_xirr),   # string: handles None + cap
                 "Value Date": str(t_val.get('Value Date', '-'))
             })
             
@@ -877,7 +923,7 @@ with tab_retirement:
                 "Invested Base": inv_col,
                 "Market Value": cur_col,
                 "Absolute %": st.column_config.ProgressColumn("Return %", format="%.2f%%", min_value=0, max_value=max(100, df_ret['Absolute %'].max())),
-                "XIRR %": st.column_config.NumberColumn("XIRR", format="%.2f%%"),
+                "XIRR %": st.column_config.TextColumn("XIRR (ann.)"),
                 "Value Date": st.column_config.TextColumn("Value Date")
             },
             disabled=True
