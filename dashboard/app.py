@@ -503,6 +503,7 @@ with tab_overview:
         # Group by Asset Name and Asset Class
         agg_dict = {
             'Units': 'sum',
+            'Live NAV': 'last',   # Same price for all rows of the same asset
             'Current Value': 'sum'
         }
         if 'Value Date' in filtered_val.columns:
@@ -520,7 +521,7 @@ with tab_overview:
             con_val['% of Portfolio'] = 0.0
         
         # Prepare for display
-        disp_cols = ['Asset Name', 'Asset Class', 'Units', 'Current Value', '% of Portfolio']
+        disp_cols = ['Asset Name', 'Asset Class', 'Units', 'Live NAV', 'Current Value', '% of Portfolio']
         if 'Value Date' in con_val.columns:
             disp_cols.append('Value Date')
             
@@ -536,6 +537,7 @@ with tab_overview:
                 "Asset Name": st.column_config.TextColumn("Asset Name", width="large"),
                 "Asset Class": st.column_config.TextColumn("Asset Class"),
                 "Units": st.column_config.NumberColumn("Total Units", format="%.2f"),
+                "Live NAV": st.column_config.NumberColumn("Live NAV (₹)", format="₹ %.2f"),
                 "Current Value": cur_col,
                 "% of Portfolio": st.column_config.ProgressColumn("% of Portfolio", format="%.2f%%", min_value=0, max_value=max(100, df_disp['% of Portfolio'].max()) if not df_disp.empty else 100)
             }
