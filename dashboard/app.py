@@ -20,7 +20,12 @@ from pyxirr import xirr
 from datetime import datetime
 from streamlit_extras.metric_cards import style_metric_cards
 
+from dashboard.responsive import inject_mobile_css, responsive_cols, is_mobile
+
 st.set_page_config(page_title="Family Wealth Dashboard", layout="wide", page_icon="📈")
+
+# Inject mobile-responsive CSS + JS viewport detector (must be early, before any content)
+inject_mobile_css()
 
 # -------------------------------------------------------------------
 # 0. THEME OVERRIDES
@@ -168,7 +173,51 @@ with st.sidebar:
         _ao = _get_as_of_dates(df_val)
         for _lbl, _dt in _ao.items():
             st.caption(f"{_lbl}: {_dt}")
-        
+
+        # ── Refresh NAV Button ──────────────────────────────────────────────
+        st.markdown("---")
+        st.markdown("### 🔄 Refresh NAV")
+        st.caption("Re-fetch live prices & recalculate XIRR without re-uploading files.")
+
+        if 'last_refresh_time' not in st.session_state:
+            st.session_state.last_refresh_time = None
+        if 'refresh_running' not in st.session_state:
+            st.session_state.refresh_running = False
+
+        if st.session_state.last_refresh_time:
+            st.caption(f"Last refreshed: {st.session_state.last_refresh_time}")
+
+        if st.button("🔄 Refresh NAV Prices", use_container_width=True, key="btn_refresh_nav",
+                     disabled=st.session_state.refresh_running):
+            st.session_state.refresh_running = True
+            import subprocess as _sp
+            with st.status("Refreshing live NAV prices…", expanded=True) as _refresh_status:
+                try:
+                    _result = _sp.run(
+                        ["uv", "run", "python", "run_all.py", "--refresh"],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        encoding="utf-8",
+                    )
+                    if _result.stdout:
+                        st.code(_result.stdout, language="text")
+                    if _result.stderr:
+                        st.code(_result.stderr, language="text")
+                    if _result.returncode == 0:
+                        st.session_state.last_refresh_time = datetime.now().strftime("%d %b %Y, %I:%M %p")
+                        st.session_state.refresh_running = False
+                        _refresh_status.update(label="NAV refresh complete ✅", state="complete", expanded=False)
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.session_state.refresh_running = False
+                        _refresh_status.update(label="Refresh failed — check logs", state="error", expanded=True)
+                except Exception as _ex:
+                    st.session_state.refresh_running = False
+                    _refresh_status.update(label="System error", state="error", expanded=True)
+                    st.error(f"Could not trigger refresh: {_ex}")
+
         # Placeholder allowing export button to reference figures created later in the script
         export_container = st.sidebar.container()
 
@@ -213,6 +262,13 @@ filtered_ledger = df_ledger[df_ledger['Portfolio Owner'].isin(selected_owners) &
 filtered_val = df_val[df_val['Portfolio Owner'].isin(selected_owners) & df_val['Asset Class'].isin(selected_assets)]
 
 st.title("📈 Family Wealth Dashboard")
+
+# On mobile the sidebar is hidden by default — surface the Show Amounts toggle inline
+if is_mobile():
+    _mobile_toggle_col, _ = st.columns([2, 3])
+    with _mobile_toggle_col:
+        _mobile_sv = st.toggle("👁️ Show Amounts", value=show_values, key="mobile_show_amounts")
+        show_values = _mobile_sv  # override with mobile toggle value
 
 # ─── As-Of Date Status Bar ───────────────────────────────────────────────────
 _as_of = _get_as_of_dates(df_val)
@@ -293,7 +349,7 @@ with tab_allocation:
                     margin=dict(t=40, b=20, l=20, r=20),
                     showlegend=False
                 )
-                st.plotly_chart(fig_alloc, use_container_width=True)
+                st.plotly_chart(fig_alloc, width="stretch")
                 
                 # Render clean metric KPIs below pie chart
                 tot_val = f_sum['Total Value'].sum()
@@ -332,7 +388,7 @@ with tab_allocation:
             # To fix crowded tiny wedges: Hide text for segments smaller than a certain percentage if possible, 
             # Plotly does this automatically but we can force it cleaner:
             fig_sun.update_layout(uniformtext=dict(minsize=9, mode='hide'))
-            st.plotly_chart(fig_sun, use_container_width=True)
+            st.plotly_chart(fig_sun, width="stretch")
 
 with tab_overview:
     # -------------------------------------------------------------------
@@ -340,7 +396,7 @@ with tab_overview:
     # -------------------------------------------------------------------
     inv, cur, ret, x_pct = calculate_dynamic_xirr(filtered_ledger, filtered_val)
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4 = responsive_cols(4)
     col1.metric("Total Invested (FIFO)", fmt_amt(inv))
     
     delta_cur = f"₹ {ret:,.0f}" if show_values else r"\*\*\*"
@@ -378,7 +434,7 @@ with tab_overview:
                         best_ret_pct = pct
                         best_asset_name = t_val.iloc[0]['Asset Name']
                         
-    col5, col6 = st.columns(2)
+    col5, col6 = responsive_cols(2, n_mobile=2)
     # Truncate length so it fits neatly
     short_best = best_asset_name[:30] + '...' if len(best_asset_name) > 30 else best_asset_name
     col5.metric("🏆 Best Performer (Abs %)", short_best, f"{fmt_pct(best_ret_pct)} Return")
@@ -404,7 +460,7 @@ with tab_overview:
             )
             fig_pie.update_traces(textposition='inside', textinfo='percent+label', marker=dict(line=dict(color='#0e1117', width=2)))
             fig_pie.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', margin=dict(t=20, b=20, l=20, r=20), showlegend=False)
-            st.plotly_chart(fig_pie, use_container_width=True)
+            st.plotly_chart(fig_pie, width="stretch")
         else:
             st.info("No data available for the selected filters.")
     
@@ -435,7 +491,7 @@ with tab_overview:
                         color_discrete_map={'Invested': '#334155', 'Current Value': '#10b981'}
                     )
                     fig_bar.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', font=dict(color='#a0aec0'), yaxis_title="Amount (₹)", margin=dict(t=20))
-                    st.plotly_chart(fig_bar, use_container_width=True)
+                    st.plotly_chart(fig_bar, width="stretch")
     
     # -------------------------------------------------------------------
     # CONSOLIDATED HOLDINGS TABLE
@@ -666,7 +722,7 @@ with tab_overview:
                         
                         st.dataframe(
                             styled_df,
-                            use_container_width=True,
+                            width="stretch",
                             hide_index=True
                         )
         else:
@@ -684,7 +740,7 @@ with tab_portfolios:
         
         p_inv, p_cur, p_ret, p_xirr = calculate_dynamic_xirr(o_ledger, o_val)
         
-        tcol1, tcol2, tcol3, tcol4, tcol5 = st.columns(5)
+        tcol1, tcol2, tcol3, tcol4, tcol5 = responsive_cols(5)
         tcol1.metric("Total Invested (FIFO)", fmt_amt(p_inv))
         delta_p_cur = f"₹ {p_ret:,.0f}" if show_values else r"\*\*\*"
         tcol2.metric("Current Value", fmt_amt(p_cur), delta_p_cur)
@@ -765,7 +821,7 @@ with tab_retirement:
     else:
         r_inv, r_cur, r_ret, r_xirr = calculate_dynamic_xirr(ret_ledger, ret_val)
         
-        tcol1, tcol2, tcol3, tcol4, tcol5 = st.columns(5)
+        tcol1, tcol2, tcol3, tcol4, tcol5 = responsive_cols(5)
         tcol1.metric("Total Invested (FIFO)", fmt_amt(r_inv))
         delta_r_cur = f"₹ {r_ret:,.0f}" if show_values else r"\*\*\*"
         tcol2.metric("Current Value", fmt_amt(r_cur), delta_r_cur)

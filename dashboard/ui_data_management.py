@@ -349,11 +349,16 @@ def render_data_management(existing_owners: list[str]) -> None:
 
     # 3. PIPELINE EXECUTION HUB
     st.markdown("---")
-    st.subheader("🚀 Run Consolidation Pipeline")
-    st.markdown("After updating inputs, run the pipeline to consolidate ledgers, fetch live NAVs, and recalculate XIRR. **Wait for the success message before switching to the Dashboard view.**")
+    st.subheader("🚀 Run Full Consolidation Pipeline")
+    st.markdown(
+        "After uploading new statement files above, run the **full pipeline** to re-parse all files, "
+        "fetch live NAVs, and recalculate XIRR.  \n"
+        "> 💡 **Just want to refresh prices without uploading files?** Use the "
+        "**🔄 Refresh NAV Prices** button in the Dashboard sidebar instead — it's much faster."
+    )
 
-    if st.button("Update Dashboard (Run Pipeline)", type="primary"):
-        with st.status("Executing `run_all.py`...", expanded=True) as status:
+    if st.button("▶️ Run Full Pipeline (Ingestion + Refresh)", type="primary"):
+        with st.status("Executing full pipeline (`run_all.py`)...", expanded=True) as status:
             try:
                 # Capture standard output directly to stream it on UI
                 result = subprocess.run(
